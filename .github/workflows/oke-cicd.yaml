@@ -7,14 +7,13 @@ on:
   pull_request:
 
 env:
-  # Registry config - Secrets
-  REGISTRY: ${{ secrets.OCI_REGISTRY }} # e.g., iad.ocir.io or phx.ocir.io
-  REPOSITORY: ${{ secrets.OCI_REPOSITORY }} # e.g., tenancy-namespace/project-name
+  # Registry config - Update these directly in the file
+  REGISTRY: <region-key>.ocir.io # e.g., iad.ocir.io or phx.ocir.io
+  REPOSITORY: <tenancy-namespace>/docs-agent # e.g., mytenancy/docs-agent
   IMAGE_NAME: docs-agent
   
-  # OKE Cluster ID - Secrets
-  OKE_CLUSTER_OCID: ${{ secrets.OKE_CLUSTER_OCID }}
-
+  # OKE Cluster ID - Update this directly in the file
+  OKE_CLUSTER_OCID: <your-oke-cluster-ocid> # e.g., ocid1.cluster.oc1...
 
 jobs:
   # 1. CI Phase: Run Python compilation check and unit tests (on all PRs and pushes to main)
