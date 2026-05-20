@@ -3,7 +3,6 @@ name: Build, Test, and Deploy to OKE
 on:
   push:
     branches:
-      - test-pr
       - main
   pull_request:
 
@@ -17,9 +16,9 @@ env:
   OKE_CLUSTER_OCID: <your-oke-cluster-ocid>
 
 jobs:
-  # 1. CI Phase: One simple CI check (Linting)
-  ci-lint:
-    name: Code Lint Check
+  # 1. CI Phase: Run Python compilation check and unit tests (on all PRs and pushes to main)
+  test-and-compile:
+    name: Compile and Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -30,19 +29,32 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Ruff
-        run: pip install ruff
-
-      - name: Run Ruff Linter
+      - name: Install Dependencies
         run: |
-          echo "Running code format & syntax checks..."
-          ruff check . --ignore E999 || echo "Linter warnings found"
+          python -m pip install --upgrade pip
+          if [ -f kagent-feast-mcp/mcp-server/requirements.txt ]; then pip install -r kagent-feast-mcp/mcp-server/requirements.txt; fi
+          if [ -f requirements-test.txt ]; then pip install -r requirements-test.txt; fi
+          pip install pytest
 
-  # 2. CD Phase: Build Docker image and Deploy
+      - name: Compile python files in MCP Server
+        run: |
+          echo "Compiling active MCP Server python files..."
+          python -m py_compile kagent-feast-mcp/mcp-server/*.py
+
+      - name: Run Unit Tests
+        run: |
+          if [ -d tests ]; then
+            echo "Running pytest suite..."
+            pytest
+          else
+            echo "No test suite directory found; skipping."
+          fi
+
+  # 2. CD Phase: Build Docker image and Deploy (ONLY runs on pushes to main branch)
   build-and-deploy:
     name: Build, Push, and Deploy to OKE
-    needs: ci-lint
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/test-pr')
+    needs: test-and-compile
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -65,7 +77,8 @@ jobs:
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./kagent-feast-mcp/mcp-server
+          file: ./kagent-feast-mcp/mcp-server/Dockerfile
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ env.tag }}
@@ -92,9 +105,11 @@ jobs:
             --token-version 2.0.0
           chmod 600 ~/.kube/config
 
-      # Deploy to Kubernetes (Apply manifests)
+      # Deploy to Kubernetes
       - name: Deploy to OKE
         run: |
           # Apply manifest files if they exist in the repository
+          if [ -f kagent-feast-mcp/manifests/serving-runtime.yaml ]; then kubectl apply -f kagent-feast-mcp/manifests/serving-runtime.yaml; fi
+          if [ -f kagent-feast-mcp/manifests/inference-service.yaml ]; then kubectl apply -f kagent-feast-mcp/manifests/inference-service.yaml; fi
           if [ -f gpu-pod.yaml ]; then kubectl apply -f gpu-pod.yaml; fi
           if [ -f vllm-qwen.yaml ]; then kubectl apply -f vllm-qwen.yaml; fi
