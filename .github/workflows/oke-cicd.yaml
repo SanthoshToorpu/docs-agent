@@ -109,6 +109,14 @@ jobs:
       # Deploy to Kubernetes
       - name: Deploy to OKE
         run: |
+          # Dynamically create/update the image pull secret in OKE
+          kubectl create secret docker-registry ocirsecret \
+            --docker-server=${{ env.REGISTRY }} \
+            --docker-username='${{ secrets.OCIR_USERNAME }}' \
+            --docker-password='${{ secrets.OCIR_AUTH_TOKEN }}' \
+            --docker-email='github-actions@example.com' \
+            --dry-run=client -o yaml | kubectl apply -f -
+
           # Apply manifest files if they exist in the repository
           if [ -f kagent-feast-mcp/manifests/serving-runtime.yaml ]; then kubectl apply -f kagent-feast-mcp/manifests/serving-runtime.yaml; fi
           if [ -f kagent-feast-mcp/manifests/inference-service.yaml ]; then kubectl apply -f kagent-feast-mcp/manifests/inference-service.yaml; fi
