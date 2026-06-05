@@ -1,0 +1,47 @@
+# Default values for docs-agent.
+global:
+  namespace:
+    app: docs-agent
+    mlInfra: ml-infra
+    kubeflow: kubeflow
+  domainName: "agent.example.com"
+  acmeEmail: "admin@example.com"
+
+mcpServer:
+  image:
+    repository: "santhoshtoorpu/mcp-kubeflow-docs"
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    port: 8000
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+
+kserve:
+  runtime:
+    image: "docker.io/kserve/huggingfaceserver:v0.18.0-gpu"
+  inference:
+    modelName: "qwen2.5-7B"
+    modelId: "Qwen/Qwen2.5-7B-Instruct-AWQ"
+    backend: "vllm"
+    maxModelLen: 32768
+    gpuMemoryUtilization: "0.90"
+    quantization: "awq"
+  resources:
+    requests:
+      cpu: "4"
+      memory: "16Gi"
+      gpu: "1"
+    limits:
+      cpu: "16"
+      memory: "64Gi"
+      gpu: "1"
+
+milvus:
+  version: "v2.4.15"

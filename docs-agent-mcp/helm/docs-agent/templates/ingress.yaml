@@ -1,0 +1,81 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: {{ .Values.global.acmeEmail }}
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+    - http01:
+        ingress:
+          ingressClassName: istio
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kagent-ui-cert
+  namespace: istio-system
+spec:
+  secretName: kagent-ui-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: {{ .Values.global.domainName }}
+  dnsNames:
+  - {{ .Values.global.domainName }}
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: kagent-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - {{ .Values.global.domainName | quote }}
+    tls:
+      httpsRedirect: true
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    hosts:
+    - {{ .Values.global.domainName | quote }}
+    tls:
+      mode: SIMPLE
+      credentialName: kagent-ui-tls
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: kagent-ui-routing
+  namespace: {{ .Values.global.namespace.app }}
+spec:
+  hosts:
+  - {{ .Values.global.domainName | quote }}
+  gateways:
+  - istio-system/kagent-gateway
+  http:
+  - corsPolicy:
+      allowOrigins:
+      - regex: ".*"
+      allowMethods:
+      - POST
+      - GET
+      - OPTIONS
+      allowHeaders:
+      - "*"
+    route:
+    - destination:
+        host: kagent-ui.{{ .Values.global.namespace.app }}.svc.cluster.local
+        port:
+          number: 8080

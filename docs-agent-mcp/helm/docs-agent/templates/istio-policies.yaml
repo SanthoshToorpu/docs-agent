@@ -1,0 +1,155 @@
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-milvus-standalone
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      component: standalone
+  action: ALLOW
+  rules:
+  - to:
+    - operation:
+        ports: ["19530", "9091"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-milvus-etcd
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd
+  action: ALLOW
+  rules:
+  - to:
+    - operation:
+        ports: ["2379", "2380"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-milvus-minio
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  selector:
+    matchLabels:
+      app: minio
+  action: ALLOW
+  rules:
+  - to:
+    - operation:
+        ports: ["9000", "9001"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-mcp-to-milvus
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      component: standalone
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["{{ .Values.global.namespace.app }}"]
+    to:
+    - operation:
+        ports: ["19530"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kagent-to-llm
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: qwen-llm
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["{{ .Values.global.namespace.app }}", "istio-system"]
+    to:
+    - operation:
+        ports: ["8080", "8012"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kagent-to-mcp
+  namespace: {{ .Values.global.namespace.app }}
+spec:
+  selector:
+    matchLabels:
+      app: mcp-kubeflow-docs
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["{{ .Values.global.namespace.app }}"]
+    to:
+    - operation:
+        ports: ["8000"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kubeflow-to-milvus
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: milvus
+      component: standalone
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["{{ .Values.global.namespace.kubeflow }}"]
+    to:
+    - operation:
+        ports: ["19530"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-mcp-to-embeddings
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: embeddings-service
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["{{ .Values.global.namespace.app }}", "istio-system"]
+    to:
+    - operation:
+        ports: ["8080", "80", "8012"]
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-kubeflow-to-embeddings
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  selector:
+    matchLabels:
+      serving.kserve.io/inferenceservice: embeddings-service
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        namespaces: ["{{ .Values.global.namespace.kubeflow }}", "istio-system"]
+    to:
+    - operation:
+        ports: ["8080", "80", "8012"]

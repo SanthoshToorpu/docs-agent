@@ -1,0 +1,43 @@
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: milvus
+  namespace: {{ .Values.global.namespace.mlInfra }}
+spec:
+  mode: standalone
+  dependencies:
+    etcd:
+      inCluster:
+        values:
+          image:
+            repository: milvusdb/etcd
+            tag: v3.5.5-r4
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+    storage:
+      inCluster:
+        values:
+          image:
+            repository: docker.io/minio/minio
+            tag: RELEASE.2023-03-20T20-16-18Z
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+  components:
+    image: "docker.io/milvusdb/milvus:{{ .Values.milvus.version }}"
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
