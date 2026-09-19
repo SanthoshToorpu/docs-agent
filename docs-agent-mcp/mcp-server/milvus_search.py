@@ -23,21 +23,11 @@ from rag_collections import (
     SPARSE_FIELD,
 )
 
-def _env(name: str, default: str) -> str:
-    return (os.getenv(name) or "").strip() or default
-
-
-CLUSTER_MILVUS_URI = _env("CLUSTER_MILVUS_URI", "http://milvus-milvus.ml-infra.svc.cluster.local:19530")
-LOCAL_MILVUS_URI = _env("LOCAL_MILVUS_URI", "http://127.0.0.1:19530")
-
 MILVUS_LOCAL_MODE = os.getenv("MILVUS_LOCAL_MODE", "").lower() in ("1", "true", "yes")
-MILVUS_URI = _env("MILVUS_URI", LOCAL_MILVUS_URI if MILVUS_LOCAL_MODE else CLUSTER_MILVUS_URI)
-MILVUS_USER = _env("MILVUS_USER", "root")
+MILVUS_URI = os.getenv("MILVUS_URI", "").strip()
+MILVUS_USER = os.getenv("MILVUS_USER", "").strip()
 MILVUS_PASSWORD = os.getenv("MILVUS_PASSWORD", "")
-EMBEDDINGS_URL = _env(
-    "EMBEDDINGS_URL",
-    "http://embeddings-service-predictor.ml-infra.svc.cluster.local/embed",
-)
+EMBEDDINGS_URL = os.getenv("EMBEDDINGS_URL", "").strip()
 
 SEARCH_MODE = os.getenv("SEARCH_MODE", "dense").strip().lower()
 ISSUES_SEARCH_MODE = os.getenv("ISSUES_SEARCH_MODE", "dense").strip().lower()
@@ -65,6 +55,8 @@ def connect() -> None:
     with _connect_lock:
         if client is not None:
             return
+        if not MILVUS_URI:
+            raise RuntimeError("MILVUS_URI is required")
         if not MILVUS_PASSWORD and not MILVUS_LOCAL_MODE:
             raise RuntimeError(
                 "MILVUS_PASSWORD is required (set via Kubernetes secret, not ConfigMap)"
