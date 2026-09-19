@@ -11,8 +11,7 @@ import pytest
 
 
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
-UTILS_DIR = PIPELINES_DIR / "utils"
-sys.path.insert(0, str(UTILS_DIR))
+sys.path.insert(0, str(PIPELINES_DIR))
 
 from code_utils import chunk_code_file, parse_json_file, parse_python_ast, parse_yaml_documents
 

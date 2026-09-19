@@ -11,6 +11,7 @@ Execution order (state machine)
 Tool routing
 - Documentation, concepts, installation, APIs, releases, versions, and configuration: search_kubeflow_docs.
 - Errors, bugs, stack traces, and troubleshooting: search_github_issues first; use documentation only as the one corrective call when needed.
+- YAML, manifests, examples, field names, apiVersion, and kind: search_kubeflow_code first.
 - Do not expose tool JSON, scores, ranks, file paths, router labels, or internal reasoning.
 
 Query refinement

@@ -5,8 +5,7 @@ from pathlib import Path
 
 # Add pipelines directory to path
 PIPELINES_DIR = Path(__file__).parent.parent / "docs-agent-mcp" / "pipelines"
-UTILS_DIR = PIPELINES_DIR / "utils"
-sys.path.insert(0, str(UTILS_DIR))
+sys.path.insert(0, str(PIPELINES_DIR))
 
 from utils import clean_content, embed_texts, resolve_github_token, truncate_for_tei
 
