@@ -9,10 +9,7 @@ Active model (llm-runtime chart, stable alias flo-llm):
   python tests/eval/slm_tool_eval.py run --name flo-llm \
       --base-url http://localhost:8081/v1 --model flo-llm --repeats 3
 
-Legacy prod baseline (Qwen on KServe huggingfaceserver, until cutover):
-  kubectl -n ml-infra port-forward svc/qwen-llm-stable 8081:80
-  python tests/eval/slm_tool_eval.py run --name prod-qwen2.5-7b \
-      --base-url http://localhost:8081/openai/v1 --model qwen2.5-7B --repeats 3
+Qwen baseline: the qwen2.5-7b-awq candidate below, or llm-runtime with model=qwen.
 
 Candidate on the spare A10:
   python tests/eval/slm_tool_eval.py manifest granite-4.2-3b | kubectl apply -f -

@@ -1,6 +1,6 @@
 # LLM runtime: decisions
 
-Status: **live since 2026-10-04 (cutover below), applied with Helm from `feat/flo-gemma`.** Live runs the branch until the PR merges.
+Status: **live since 2026-10-04 (rollout below).**
 Scope: [PR #261](https://github.com/kubeflow/docs-agent/pull/261). Last updated 2026-10-04.
 
 ## Summary
@@ -48,7 +48,7 @@ values: model = gemma ──> catalog.gemma ──> InferenceService llm (vLLM, 
 | `model` | The one switch: a key under `catalog` |
 | `servedModelName` | Stable alias clients call (`flo-llm`) |
 | `catalog.<name>` | One profile per model: image, HF id and pinned revision, quantization, context length, GPU memory share, tool and reasoning parsers, thinking default, extra args, CPU, RAM and `/dev/shm` |
-| `placement` | GPU node selector and tolerations, shared by all profiles. Both A10 nodes match (`nvidia.com/gpu=true`, zone `US-ASHBURN-AD-1`) |
+| `placement` | GPU node selector and tolerations, shared by all profiles. |
 | `cache` | One RWO weights PVC (`llm-hf-cache`, 50Gi), kept on uninstall. It holds the weights of every profile that has run |
 | `hfToken.existingSecret` | Optional; only for gated models |
 | `inferenceService`, `service` | Names, rollout strategy (`Recreate`: one GPU), probes, and stable Service port |
@@ -96,7 +96,7 @@ values: model = gemma ──> catalog.gemma ──> InferenceService llm (vLLM, 
 
 ## 6. CI (`.github/workflows/oke-cicd.yaml`, `tests.yml`)
 
-- `deploy_kserve` and `deploy_gemma` are replaced by one input, `deploy_llm`. It runs `helm upgrade --install llm-runtime … --atomic --cleanup-on-fail`, waits for `deployment/<isvc>-predictor`, then runs `helm test`. Pushes to main never restart the model.
+- `deploy_kserve` and `deploy_gemma` are replaced by one input, `deploy_llm`. It runs `helm upgrade --install llm-runtime … --atomic --cleanup-on-fail`, waits for `deployment/<isvc>-predictor`, then runs `helm test`. A push installs `llm-runtime` only when the release is missing; otherwise pushes to main never restart the model.
 - Lint and render loop over every catalog key (`yq '.catalog | keys'`), so a broken rollback profile fails CI.
 - "Smoke test LLM" reads the Service name and served alias from the chart values; there are no model names in the workflow.
 - The legacy Knative `qwen-llm` migration and recovery block is deleted. No `qwen-llm` objects remain on the cluster.
@@ -130,30 +130,22 @@ The model evals (`SLM_EVALS.md`) ran on the previous prompt. Its weaknesses on G
 - Expected effect: 258 → 270/291, with median reply time going from 1.3 s to 2.9 s.
 - Rejected: passing a flag in A2A metadata, because kagent does not map it onto model parameters.
 
-## Cutover (done 2026-10-04, maintenance window 10:50–12:38 IST)
+## Rollout
 
-Run by hand with Helm from the staged branch, in an operator-approved window (Flo and the debug agent were down throughout). Backups of every touched object are in `D:\docs-agent-backups\2026-10-04\` on the operator machine.
+Order matters, because each step depends on the one before it:
 
-1. Stopped the legacy models: annotated `qwen-llm-standard` with `serving.kserve.io/stop=true` (KServe removes the predictor, keeps the ISVC) and scaled `slm-eval/slm` to 0.
-2. Installed `llm-runtime` (`model: gemma`) and a temporary `llm-eval-qwen` release (`--set model=qwen` plus distinct ISVC, Service, and PVC names), one per A10. Both passed `helm test`.
-3. Ran the round-2 evals against both releases (`tests/eval/SLM_EVALS.md`): Gemma 258/270 (identical to round 1), Qwen 168 (matches baseline).
-4. `helm uninstall llm-eval-qwen` (its PVC went with it): the second A10 is free.
-5. `helm upgrade docs-agent` with a local, untracked values file pinning the live MCP image (revision 3): all agents on `flo-llm` / `flo-llm-think`, `kubeflow-docs-agent-think` added, `kserve-qwen` deleted. The MCP image digest and its hand-added `LANGFUSE_*` env survived the three-way merge.
-6. Verified: `helm test` for both releases, `smoke_tools.py`, a curl chat completion on `llm-stable`, and docs, think, and debug agents end to end through the public gateway.
+1. `llm-runtime` first (`model: gemma`), then `helm test llm-runtime`. CI installs it automatically when the release is missing; after that only a `deploy_llm` dispatch restarts the model.
+2. `docs-agent`: its ModelConfigs call `llm-stable`, so step 1 must be Ready.
+3. The chat widget that sends session tokens must be live before `gateway-guardrails` runs with `sessionAuth.enforce: true`; otherwise public chat returns 403.
+4. `gateway-guardrails` (Terraform-managed): apply with `llmInferenceServiceNames: [llm]` and enforcement on.
 
 Found on the cluster and fixed in the chart:
 - An empty CPU limit lets KServe inject its default (`cpuLimit: "1"`), which rejects the 4-CPU request; the server dry-run cannot see this. Every profile now sets all four CPU/memory values, and the template `required`s them.
-- The nodes' CRI-O enforces fully qualified image names, so short names (`curlimages/curl`, `busybox`) fail as ambiguous. Test pods and the CI smoke test now use `docker.io/...`.
+- CRI-O on the nodes enforces fully qualified image names, so short names (`curlimages/curl`, `busybox`) fail as ambiguous. Test pods and the CI smoke test use `docker.io/...`.
 
-Not done (deliberately): `gateway-guardrails` is Terraform-managed and its state is not on the operator machine; its mesh policies are not enforced on the model pods, so the selector change waits for the state holder (`terraform plan`, then apply with `llmInferenceServiceNames: [llm]`). When the PR merges, CI's `docs-agent` upgrade replaces the MCP image with its own build.
+Objects left from the old setup (Qwen ISVC `qwen-llm-standard`, the `llm-runtime` ServingRuntime, `qwen-llm-stable`, PVC `qwen-hf-cache`, `tool-choice-proxy`, and the ModelConfigs `slm-gemma` and `local-qwen`) are not managed by these charts and can be deleted after a stable period.
 
-Remaining:
-- After a stable period, delete the stopped and hand-made objects:
-   - Qwen: ISVC `qwen-llm-standard`, ServingRuntime `llm-runtime`, Service `qwen-llm-stable`, PVC `qwen-hf-cache`
-   - Unowned extras: `tool-choice-proxy`, `slm-eval/slm`, the canary agent `kubeflow-docs-agent-gemma`, and the ModelConfigs `slm-gemma` and `local-qwen`
-   - Qwen monitoring: `allow-prometheus-to-qwen-metrics`, ServiceMonitor `monitoring/qwen-llm-predictor`. The observability PR re-targets these at `llm`.
-   
-**Rollback:** set `model: qwen` (validated in round 2) and dispatch `deploy_llm`, or `helm rollback llm-runtime`; clients never change. Full revert to the pre-cutover setup: `helm rollback docs-agent 2`, `helm uninstall llm-runtime`, remove the stop annotation from `qwen-llm-standard`, and scale `slm-eval/slm` to 1.
+**Rollback:** set `model: qwen` and dispatch `deploy_llm`, or `helm rollback llm-runtime`; clients never change.
 
 ## Later iterations (not this PR)
 

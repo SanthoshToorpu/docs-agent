@@ -258,7 +258,14 @@ jobs:
             -n "${{ env.K8S_NAMESPACE }}" --timeout=600s
           helm test docs-agent -n "${{ env.K8S_NAMESPACE }}" --timeout 2m
 
+          LLM_DEPLOY=false
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.deploy_llm }}" = "true" ]; then
+            LLM_DEPLOY=true
+          elif ! helm status llm-runtime -n ml-infra >/dev/null 2>&1; then
+            echo "llm-runtime is not installed; the docs-agent ModelConfigs need it"
+            LLM_DEPLOY=true
+          fi
+          if [ "${LLM_DEPLOY}" = "true" ]; then
             # Restarts the model (one GPU, Recreate). Which model runs is the
             # chart's `model` value; this step never changes it.
             LLM_ISVC="$(helm show values docs-agent-mcp/charts/llm-runtime | yq '.inferenceService.name')"

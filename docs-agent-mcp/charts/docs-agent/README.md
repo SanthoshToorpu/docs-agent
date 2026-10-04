@@ -14,6 +14,10 @@ prompt file and MCP tools:
 | `kubeflow-docs-agent-think` | `flo-llm-think` (`reasoningEffort: low`, 4096 tokens) | on, when the model supports it |
 | `kubeflow-debug-agent` | `flo-llm` | server default |
 
+The docs agents get `search_kubeflow_docs` and `search_github_issues` only;
+`search_kubeflow_code` stays with the debug agent, so code results do not
+crowd out docs for conceptual questions.
+
 Both ModelConfigs call the `llm-runtime` release (`llm-stable`, model name
 `flo-llm`). Which model answers is chosen there by its `model` value, so a
 model switch never changes this chart. The frontend's Think toggle switches

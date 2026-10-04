@@ -191,12 +191,6 @@ python tests/eval/slm_tool_eval.py run --name qwen2.5-7b-awq-vllm030 --model qwe
 kubectl -n ml-infra port-forward svc/llm-stable 8081:80
 python tests/eval/slm_tool_eval.py run --name flo-llm --base-url http://localhost:8081/v1 \
   --model flo-llm --repeats 3
-
-# Legacy prod baseline, until cutover (read-only)
-kubectl -n ml-infra port-forward svc/qwen-llm-stable 8081:80
-python tests/eval/slm_tool_eval.py run --name prod-qwen2.5-7b-noproxy \
-  --base-url http://localhost:8081/openai/v1 --model qwen2.5-7B --repeats 3
-
 # After changing scorer rules or the dataset's expectations
 python tests/eval/slm_tool_eval.py rescore --name gemma-4-e4b-thinkoff-auto
 ```
