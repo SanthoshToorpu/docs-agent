@@ -1,6 +1,6 @@
 # LLM runtime: decisions
 
-Status: **live since 2026-10-04 (cutover below), applied with Helm from `feat/flo-gemma` (staged, not committed or pushed).** Live runs the branch until the PR merges.
+Status: **live since 2026-10-04 (cutover below), applied with Helm from `feat/flo-gemma`.** Live runs the branch until the PR merges.
 Scope: [PR #261](https://github.com/kubeflow/docs-agent/pull/261). Last updated 2026-10-04.
 
 ## Summary
@@ -19,7 +19,7 @@ Scope: [PR #261](https://github.com/kubeflow/docs-agent/pull/261). Last updated 
 | 10 | Langfuse | Removed from this PR; it moves to the observability PR |
 | 11 | Evals | One markdown record (`tests/eval/SLM_EVALS.md`); result JSONs and `slm_chat.py` are not committed |
 | 12 | Thinking | UI "Think deeper" toggle that switches to a thinking agent (`reasoningEffort: low`) |
-| 13 | Docs prompt | Keep the live prompt (it is what every eval ran); A/B it next iteration |
+| 13 | Docs prompt | Rewritten for Gemma (identity, scope, query rules); A/B-tested with `prompt_lab.py` |
 
 ---
 
@@ -115,11 +115,12 @@ There were never secret values in the PR, only `optional: true` references to th
 
 - `tests/eval/SLM_EVALS.md` is the single record: method, gates, full matrix, per-group table, speed, kagent end-to-end, known issues, scorer changes, iteration log.
 - `tests/eval/slm_results/` is gitignored (the JSONs stay local), and `slm_chat.py` is deleted.
-- `slm_tool_eval.py` and `flo_eval_v2.json` stay, so every number is reproducible.
+- `slm_tool_eval.py` and `flo_eval_dataset.json` stay, so every number is reproducible.
+- `prompt_lab.py` A/B-tests docs prompts against the live model and MCP; candidate prompts are passed as file paths and are not committed.
 
 ## 10. Docs prompt
 
-`files/docs-system-message.txt` is byte-identical to the live `kubeflow-docs-agent` prompt; the PR did not write a new one. Every eval used it. Known weaknesses on Gemma: the greeting rule over-applies ("Sup." for off-topic questions), and there is no empty-results rule (blank replies). Keep it for this PR; A/B it against the upstream prompt next iteration.
+The model evals (`SLM_EVALS.md`) ran on the previous prompt. Its weaknesses on Gemma were a greeting rule that over-applied ("Sup." for off-topic questions) and no empty-results rule (blank replies). `files/docs-system-message.txt` is rewritten to fix both: identity questions are answered as Flo, off-topic questions are declined, and a missing answer is stated as not found. `prompt_lab.py` compares prompts against the live model and MCP, including whether definition questions retrieve the defining page.
 
 ## 11. Thinking as a UI toggle
 
@@ -157,5 +158,5 @@ Remaining:
 ## Later iterations (not this PR)
 
 - Tool-choice proxy (section 7), only with eval evidence.
-- Prompt A/B and the fixes for greeting and empty results (section 10).
+- Retrieval for definition questions: hybrid search fetches only `top_k` per leg, so "what is Kubeflow" can miss the defining page (MCP server change).
 - Observability PR: Langfuse, OTel, and LLM metrics scraping for the `llm` ISVC, rebased on main after this PR.

@@ -29,7 +29,7 @@ Why the thinking toggle: Kagent cannot send `chat_template_kwargs`, but vLLM v0.
 
 `slm_tool_eval.py` calls the model's OpenAI-compatible endpoint directly (no Kagent, no MCP) with Flo's real system prompts and MCP tool schemas plus Kagent's `ask_user`. Tool results are canned fixtures rendered by `mcp-server/citations.py`, so the model sees prod formatting. It scores only the next assistant turn.
 
-Dataset: `flo_eval_v2.json`, 97 cases, run 3 times each at temperature 0 (291 scored turns).
+Dataset: `flo_eval_dataset.json`, 97 cases, run 3 times each at temperature 0 (291 scored turns).
 
 | Group | Cases | Checks |
 |---|---|---|

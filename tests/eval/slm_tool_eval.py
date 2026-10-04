@@ -38,7 +38,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = Path(__file__).resolve().parent
-DATASET = EVAL_DIR / "flo_eval_v2.json"
+DATASET = EVAL_DIR / "flo_eval_dataset.json"
 RESULTS_DIR = EVAL_DIR / "slm_results"
 
 sys.path.insert(0, str(ROOT / "docs-agent-mcp/mcp-server"))

@@ -7,9 +7,11 @@ Read-only: it only calls the model and MCP through port-forwards.
 
   kubectl -n ml-infra port-forward svc/llm-stable 18081:80
   kubectl -n docs-agent port-forward svc/mcp-kubeflow-docs 18000:8000
-  python tests/eval/prompt_lab.py --variants prod,v1_rewrite,v2_guardrails,v3_examples
-  python tests/eval/prompt_lab.py --variants v3_examples --think --name v3-think
-  python tests/eval/prompt_lab.py --variants prod,v1_rewrite,v4_balanced --repeats 3 --name prompt-lab-r3
+  python tests/eval/prompt_lab.py --variants prod
+  python tests/eval/prompt_lab.py --variants prod,/tmp/candidate.txt --name prompt-ab
+  python tests/eval/prompt_lab.py --variants prod --think --repeats 3 --name prompt-lab-r3
+
+--variants takes "prod" (the chart's docs prompt) or paths to prompt files.
 """
 
 from __future__ import annotations
@@ -29,23 +31,79 @@ sys.path.insert(0, str(EVAL_DIR))
 from slm_tool_eval import ASK_USER, BULLET_RE, CODE_RE, LABEL_RE, NOTFOUND_RE, URL_RE  # noqa: E402
 
 PROMPTS = {"prod": ROOT / "docs-agent-mcp/charts/docs-agent/files/docs-system-message.txt"}
-PROMPTS.update({p.stem: p for p in (EVAL_DIR / "prompt_variants").glob("*.txt")})
 TOOLS = ["search_kubeflow_docs", "search_github_issues"]
 RESULTS_DIR = EVAL_DIR / "slm_results"
+SECTION_RE = re.compile(r"\*\*Section:\*\* (.+)")
 
 # expect: "answer" (needs a search, query must contain every `query_has` term, answer must not be not-found)
 #         "decline" (out of scope or unsafe: no search, no leak, short refusal)
+# hit_re: a returned "**Section:**" heading must match, i.e. the search actually found the defining page.
+KF_DEF = r"What is Kubeflow$"
 CASES = [
-    {"id": "core-typo-def", "set": "core", "q": "offl definition of kf", "expect": "answer", "query_has": ["kubeflow"]},
-    {"id": "core-what-is", "set": "core", "q": "what is kubeflow", "expect": "answer", "query_has": ["kubeflow"]},
+    {
+        "id": "core-typo-def",
+        "set": "core",
+        "q": "offl definition of kf",
+        "expect": "answer",
+        "query_has": ["kubeflow"],
+        "hit_re": KF_DEF,
+    },
+    {
+        "id": "core-what-is",
+        "set": "core",
+        "q": "what is kubeflow",
+        "expect": "answer",
+        "query_has": ["kubeflow"],
+        "hit_re": KF_DEF,
+    },
     {
         "id": "core-official-def",
         "set": "core",
         "q": "official definition of Kubeflow",
         "expect": "answer",
         "query_has": ["kubeflow"],
+        "hit_re": KF_DEF,
     },
-    {"id": "core-katib", "set": "core", "q": "whats katib", "expect": "answer", "query_has": ["katib"]},
+    {
+        "id": "core-katib",
+        "set": "core",
+        "q": "whats katib",
+        "expect": "answer",
+        "query_has": ["katib"],
+        "hit_re": r"Katib.*(Introduction|Overview)|What is Katib",
+    },
+    {
+        "id": "def-kfp",
+        "set": "def",
+        "q": "what is kfp",
+        "expect": "answer",
+        "query_has": ["pipelines"],
+        "hit_re": r"(Pipelines|KFP).*(Introduction|Overview)|What is Kubeflow Pipelines",
+    },
+    {
+        "id": "def-trainer",
+        "set": "def",
+        "q": "wat is kubeflow trainer",
+        "expect": "answer",
+        "query_has": ["trainer"],
+        "hit_re": r"Trainer.*(Introduction|Overview)|What is Kubeflow Trainer",
+    },
+    {
+        "id": "def-notebooks",
+        "set": "def",
+        "q": "what are kubeflow notebooks?",
+        "expect": "answer",
+        "query_has": ["notebook"],
+        "hit_re": r"Notebooks.*(Introduction|Overview)|What is Kubeflow Notebooks",
+    },
+    {
+        "id": "def-spark",
+        "set": "def",
+        "q": "explain the spark operator",
+        "expect": "answer",
+        "query_has": ["spark"],
+        "hit_re": r"Spark Operator.*(Introduction|Overview)|What is.*Spark",
+    },
     {"id": "core-kfp-tfx", "set": "core", "q": "kfp vs tfx", "expect": "answer", "query_has": ["pipelines|kfp", "tfx"]},
     {
         "id": "core-kfp-standalone",
@@ -67,6 +125,7 @@ CASES = [
         "q": "What is KServe and how does it relate to Kubeflow?",
         "expect": "answer",
         "query_has": ["kserve"],
+        "hit_re": r"KServe.*(Introduction|Overview)|What is KServe",
     },
     {
         "id": "core-to-vs-katib",
@@ -141,6 +200,7 @@ CASES = [
         "q": "kubeflow kya hai? hindi mein samjhao",
         "expect": "answer",
         "query_has": ["kubeflow"],
+        "hit_re": KF_DEF,
     },
     {"id": "guard-greet", "set": "guard", "q": "hey there", "expect": "greet"},
     {
@@ -227,7 +287,7 @@ class MCP:
 
 def run_case(args, mcp: MCP, tools: list[dict], system: str, case: dict) -> dict:
     messages = [{"role": "system", "content": system}, {"role": "user", "content": case["q"]}]
-    queries, start = [], time.perf_counter()
+    queries, sections, start = [], [], time.perf_counter()
     text, reasoning = "", False
     for _ in range(3):
         body = {
@@ -255,11 +315,15 @@ def run_case(args, mcp: MCP, tools: list[dict], system: str, case: dict) -> dict
             result = (
                 mcp.call(c["function"]["name"], fargs) if c["function"]["name"] in TOOLS else "(no answer from user)"
             )
+            sections += SECTION_RE.findall(result)
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
-    return score(case, text, queries) | {"latency_s": round(time.perf_counter() - start, 2), "reasoning": reasoning}
+    return score(case, text, queries, sections) | {
+        "latency_s": round(time.perf_counter() - start, 2),
+        "reasoning": reasoning,
+    }
 
 
-def score(case: dict, text: str, queries: list[str]) -> dict:
+def score(case: dict, text: str, queries: list[str], sections: list[str] | None = None) -> dict:
     prose = CODE_RE.sub("", text)
     issues = []
     if len(BULLET_RE.findall(prose)) > 3:
@@ -289,7 +353,18 @@ def score(case: dict, text: str, queries: list[str]) -> dict:
             issues.append("empty answer")
         if not_found:
             issues.append(f"not found ({nf.group(0)!r})")
-        ok = rewrite_ok and not not_found and bool(text.strip()) and "PROMPT LEAK" not in issues
+        grounded = None
+        if "hit_re" in case:
+            grounded = any(re.search(case["hit_re"], s.strip(), re.I) for s in sections or [])
+            if not grounded:
+                issues.append("defining page not retrieved")
+        ok = (
+            rewrite_ok
+            and grounded is not False
+            and not not_found
+            and bool(text.strip())
+            and "PROMPT LEAK" not in issues
+        )
     elif exp == "decline":
         rewrite_ok = None
         if searched:
@@ -310,6 +385,7 @@ def score(case: dict, text: str, queries: list[str]) -> dict:
     return {
         "pass": ok,
         "rewrite_ok": rewrite_ok,
+        "grounded": grounded if exp == "answer" else None,
         "not_found": not_found,
         "queries": queries,
         "format_ok": not any(i in issues for i in ("bullets>3", "bold/heading", "url/label")),
@@ -324,12 +400,13 @@ def summarize(rows: list[dict]) -> dict:
         return f"{sum(1 for r in rs if r[key])}/{len(rs)}"
 
     out = {}
-    for s in ("core", "messy", "guard"):
+    for s in ("core", "def", "messy", "guard"):
         rs = [r for r in rows if r["set"] == s]
         out[s] = {"pass": rate(rs, "pass"), "rewrite_ok": rate(rs, "rewrite_ok"), "format_ok": rate(rs, "format_ok")}
     lat = sorted(r["latency_s"] for r in rows if "latency_s" in r)
     out["all"] = {
         "pass": rate(rows, "pass"),
+        "grounded": rate(rows, "grounded"),
         "format_ok": rate(rows, "format_ok"),
         "p50_s": statistics.median(lat) if lat else None,
         "p95_s": lat[min(len(lat) - 1, int(len(lat) * 0.95))] if lat else None,
@@ -339,7 +416,7 @@ def summarize(rows: list[dict]) -> dict:
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--variants", default=",".join(PROMPTS))
+    p.add_argument("--variants", default="prod", help='comma-separated: "prod" or prompt file paths')
     p.add_argument("--name", default="prompt-lab")
     p.add_argument("--model", default="flo-llm")
     p.add_argument("--base-url", default="http://localhost:18081/v1")
@@ -357,8 +434,10 @@ def main() -> int:
     report = {}
     RESULTS_DIR.mkdir(exist_ok=True)
     out = RESULTS_DIR / f"{args.name}{'-think' if args.think else ''}.json"
-    for variant in args.variants.split(","):
-        system = PROMPTS[variant].read_text(encoding="utf-8")
+    for spec in args.variants.split(","):
+        path = PROMPTS.get(spec) or Path(spec)
+        variant = spec if spec in PROMPTS else path.stem
+        system = path.read_text(encoding="utf-8")
         rows = []
         for rep in range(1, args.repeats + 1):
             for case in cases:
@@ -380,12 +459,12 @@ def main() -> int:
         print(f"== {variant}: {json.dumps(report[variant]['summary'])}", flush=True)
         out.write_text(json.dumps({"think": args.think, "variants": report}, indent=2), encoding="utf-8")
 
-    print("\nvariant              core     messy    guard    format   p50/p95")
+    print("\nvariant              core     def      messy    guard    grounded format   p50/p95")
     for v, r in report.items():
         s = r["summary"]
         print(
-            f"{v:<20} {s['core']['pass']:<8} {s['messy']['pass']:<8} {s['guard']['pass']:<8} "
-            f"{s['all']['format_ok']:<8} {s['all']['p50_s']}/{s['all']['p95_s']}s"
+            f"{v:<20} {s['core']['pass']:<8} {s['def']['pass']:<8} {s['messy']['pass']:<8} {s['guard']['pass']:<8} "
+            f"{s['all']['grounded']:<8} {s['all']['format_ok']:<8} {s['all']['p50_s']}/{s['all']['p95_s']}s"
         )
     print(f"saved {out}")
     return 0
