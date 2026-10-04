@@ -1,10 +1,15 @@
-"""Flo tool-use eval at the LLM layer (no kagent, no MCP, no tool-choice proxy).
+"""Flo tool-use eval at the LLM layer (no kagent, no MCP; tool_choice auto).
 
 Sends the live Flo system prompts + MCP tool schemas (plus kagent's ask_user) to an
 OpenAI-compatible endpoint and scores the first assistant turn per case. Canned tool
 results are rendered with mcp-server/citations.py so the model sees prod formatting.
 
-Prod baseline (current Qwen, proxy bypassed):
+Active model (llm-runtime chart, stable alias flo-llm):
+  kubectl -n ml-infra port-forward svc/llm-stable 8081:80
+  python tests/eval/slm_tool_eval.py run --name flo-llm \
+      --base-url http://localhost:8081/v1 --model flo-llm --repeats 3
+
+Legacy prod baseline (Qwen on KServe huggingfaceserver, until cutover):
   kubectl -n ml-infra port-forward svc/qwen-llm-stable 8081:80
   python tests/eval/slm_tool_eval.py run --name prod-qwen2.5-7b \
       --base-url http://localhost:8081/openai/v1 --model qwen2.5-7B --repeats 3
@@ -13,15 +18,15 @@ Candidate on the spare A10:
   python tests/eval/slm_tool_eval.py manifest granite-4.2-3b | kubectl apply -f -
   kubectl -n slm-eval port-forward svc/slm 8000:8000
   python tests/eval/slm_tool_eval.py run --name granite-4.2-3b --model granite-4.2-3b \
-      --thinking off --tool-choice auto
+      --thinking off
 """
 
 from __future__ import annotations
 
 import argparse
 import http.client
-import importlib.util
 import json
+import os
 import re
 import statistics
 import sys
@@ -35,7 +40,6 @@ ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = Path(__file__).resolve().parent
 DATASET = EVAL_DIR / "flo_eval_v2.json"
 RESULTS_DIR = EVAL_DIR / "slm_results"
-PROXY_FILE = ROOT / "docs-agent-mcp/charts/docs-agent/files/tool-choice-proxy.py"
 
 sys.path.insert(0, str(ROOT / "docs-agent-mcp/mcp-server"))
 from citations import format_code_hits, format_docs_hits, format_issues_hits  # noqa: E402
@@ -59,7 +63,8 @@ NOTFOUND_RE = re.compile(
     re.I,
 )
 
-NODE = "10.0.10.59"
+# Optional: pin the eval pod to one GPU node by hostname; otherwise any GPU node.
+NODE = os.environ.get("SLM_EVAL_NODE", "")
 IMAGE = "docker.io/vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90"
 NO_THINK = '{"enable_thinking": false}'
 
@@ -96,6 +101,11 @@ CANDIDATES = {
             "--limit-mm-per-prompt",
             '{"image": 0, "audio": 0}',
         ],
+    },
+    "qwen2.5-7b-awq": {
+        "hf": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+        "revision": "b25037543e9394b818fdfca67ab2a00ecc7dd641",
+        "args": ["--quantization", "awq", "--tool-call-parser", "hermes"],
     },
 }
 
@@ -210,17 +220,8 @@ def build_messages(case: dict, system: str, fixtures: dict) -> tuple[list[dict],
     return messages, prior_queries
 
 
-def load_proxy_rewriter():
-    spec = importlib.util.spec_from_file_location("tool_choice_proxy", PROXY_FILE)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.rewrite_body
-
-
 def chat(args, body: dict) -> tuple[dict, float]:
     raw = json.dumps(body).encode()
-    if args.tool_choice == "proxy":
-        raw = args.rewrite(raw)
     req = urllib.request.Request(
         args.base_url.rstrip("/") + "/chat/completions", data=raw, headers={"Content-Type": "application/json"}
     )
@@ -389,10 +390,10 @@ def run(args: argparse.Namespace) -> int:
     data = json.loads(DATASET.read_text(encoding="utf-8"))
     agents = data["agents"]
     systems = {name: (ROOT / a["prompt_file"]).read_text(encoding="utf-8") for name, a in agents.items()}
+    if args.docs_prompt:
+        systems["docs"] = Path(args.docs_prompt).read_text(encoding="utf-8")
     tools = {name: tool_defs(a["tools"]) for name, a in agents.items()}
     cases = [c for c in data["cases"] if not args.only or args.only in c["id"] or args.only == c["group"]]
-    args.rewrite = load_proxy_rewriter() if args.tool_choice == "proxy" else None
-
     rows = []
     for rep in range(1, args.repeats + 1):
         for case in cases:
@@ -615,7 +616,7 @@ def summarize(args, rows: list[dict], cases: list[dict]) -> dict:
     return {
         "name": args.name,
         "model": args.model,
-        "tool_choice": args.tool_choice,
+        "tool_choice": "auto",
         "thinking": args.thinking,
         "repeats": args.repeats,
         "cases": len(cases),
@@ -702,7 +703,7 @@ def manifest(args: argparse.Namespace) -> int:
                 "template": {
                     "metadata": {"labels": labels, "annotations": {"slm/candidate": args.candidate}},
                     "spec": {
-                        "nodeSelector": {"kubernetes.io/hostname": NODE},
+                        "nodeSelector": {"kubernetes.io/hostname": NODE} if NODE else {},
                         "tolerations": [{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}],
                         "containers": [
                             {
@@ -751,11 +752,11 @@ def main() -> int:
     r.add_argument("--model", required=True)
     r.add_argument("--base-url", default="http://localhost:8000/v1")
     r.add_argument("--repeats", type=int, default=1)
-    r.add_argument("--tool-choice", choices=["auto", "proxy"], default="auto")
     r.add_argument("--thinking", choices=["unset", "on", "off"], default="unset")
     r.add_argument("--max-tokens", type=int, default=1024)
     r.add_argument("--timeout", type=int, default=180)
     r.add_argument("--only", default="", help="case id substring or group name")
+    r.add_argument("--docs-prompt", default="", help="override the docs agent system prompt file")
     m = sub.add_parser("manifest")
     m.add_argument("candidate", choices=sorted(CANDIDATES))
     s = sub.add_parser("rescore", help="re-apply answer checks to a saved run without calling the model")

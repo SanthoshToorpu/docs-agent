@@ -1,40 +1,20 @@
 {{- if .Values.kagent.enabled }}
-{{- if .Values.kagent.model.apiKeySecret.create }}
+{{- $secret := .Values.kagent.apiKeySecret }}
+{{- if $secret.create }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ .Values.kagent.model.apiKeySecret.name }}
+  name: {{ $secret.name }}
   labels:
     {{- include "docs-agent.labels" . | nindent 4 }}
 type: Opaque
 stringData:
-  {{ .Values.kagent.model.apiKeySecret.key }}: {{ .Values.kagent.model.apiKeySecret.value | quote }}
+  {{ $secret.key }}: {{ $secret.value | quote }}
 ---
 {{- end }}
-apiVersion: kagent.dev/v1alpha2
-kind: ModelConfig
-metadata:
-  name: {{ .Values.kagent.model.name }}
-  labels:
-    {{- include "docs-agent.labels" . | nindent 4 }}
-spec:
-  provider: {{ .Values.kagent.model.provider }}
-  apiKeySecret: {{ .Values.kagent.model.apiKeySecret.name }}
-  apiKeySecretKey: {{ .Values.kagent.model.apiKeySecret.key }}
-  model: {{ .Values.kagent.model.model }}
-  openAI:
-    {{- if .Values.toolChoiceProxy.enabled }}
-    baseUrl: {{ printf "http://tool-choice-proxy.%s.svc.cluster.local/openai/v1" .Release.Namespace | quote }}
-    {{- else }}
-    baseUrl: {{ .Values.kagent.model.baseUrl | quote }}
-    {{- end }}
-    temperature: {{ .Values.kagent.model.temperature | quote }}
-    topP: {{ .Values.kagent.model.topP | quote }}
-    maxTokens: {{ .Values.kagent.model.maxTokens }}
-    timeout: {{ .Values.kagent.model.timeout }}
----
-{{- with .Values.kagent.directModel }}
-{{- if .enabled }}
+{{- $modelNames := list }}
+{{- range .Values.kagent.models }}
+{{- $modelNames = append $modelNames .name }}
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
@@ -43,8 +23,8 @@ metadata:
     {{- include "docs-agent.labels" $ | nindent 4 }}
 spec:
   provider: OpenAI
-  apiKeySecret: {{ $.Values.kagent.model.apiKeySecret.name }}
-  apiKeySecretKey: {{ $.Values.kagent.model.apiKeySecret.key }}
+  apiKeySecret: {{ $secret.name }}
+  apiKeySecretKey: {{ $secret.key }}
   model: {{ .model }}
   openAI:
     baseUrl: {{ .baseUrl | quote }}
@@ -52,8 +32,10 @@ spec:
     topP: {{ .topP | quote }}
     maxTokens: {{ .maxTokens }}
     timeout: {{ .timeout }}
+    {{- with .reasoningEffort }}
+    reasoningEffort: {{ . }}
+    {{- end }}
 ---
-{{- end }}
 {{- end }}
 apiVersion: kagent.dev/v1alpha2
 kind: RemoteMCPServer
@@ -65,52 +47,33 @@ spec:
   description: MCP server for grounded Kubeflow documentation, issue, and code search
   url: http://{{ include "docs-agent.mcpName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.mcp.service.port }}/mcp
   timeout: {{ .Values.kagent.remoteMcp.timeout }}
----
-{{- if .Values.kagent.agents.docs.enabled }}
-apiVersion: kagent.dev/v1alpha2
-kind: Agent
-metadata:
-  name: {{ .Values.kagent.agents.docs.name }}
-  labels:
-    {{- include "docs-agent.labels" . | nindent 4 }}
-spec:
-  description: Kubeflow documentation assistant
-  type: Declarative
-  declarative:
-    modelConfig: {{ .Values.kagent.agents.docs.modelConfig | default .Values.kagent.model.name }}
-    stream: true
-    tools:
-      - type: McpServer
-        mcpServer:
-          name: {{ .Values.kagent.remoteMcp.name }}
-          kind: RemoteMCPServer
-          toolNames:
-            {{- toYaml .Values.kagent.agents.docs.toolNames | nindent 12 }}
-    systemMessage: |-
-{{ .Files.Get "files/docs-system-message.txt" | nindent 6 }}
----
+{{- range $role, $agent := .Values.kagent.agents }}
+{{- if $agent.enabled }}
+{{- if not (has $agent.modelConfig $modelNames) }}
+{{- fail (printf "kagent.agents.%s.modelConfig %q is not in kagent.models" $role $agent.modelConfig) }}
 {{- end }}
-{{- if .Values.kagent.agents.debug.enabled }}
+---
 apiVersion: kagent.dev/v1alpha2
 kind: Agent
 metadata:
-  name: {{ .Values.kagent.agents.debug.name }}
+  name: {{ $agent.name }}
   labels:
-    {{- include "docs-agent.labels" . | nindent 4 }}
+    {{- include "docs-agent.labels" $ | nindent 4 }}
 spec:
-  description: Kubeflow debugging and code assistant
+  description: {{ $agent.description }}
   type: Declarative
   declarative:
-    modelConfig: {{ .Values.kagent.agents.debug.modelConfig | default .Values.kagent.model.name }}
+    modelConfig: {{ $agent.modelConfig }}
     stream: true
     tools:
       - type: McpServer
         mcpServer:
-          name: {{ .Values.kagent.remoteMcp.name }}
+          name: {{ $.Values.kagent.remoteMcp.name }}
           kind: RemoteMCPServer
           toolNames:
-            {{- toYaml .Values.kagent.agents.debug.toolNames | nindent 12 }}
+            {{- toYaml $agent.toolNames | nindent 12 }}
     systemMessage: |-
-{{ .Files.Get "files/debug-system-message.txt" | nindent 6 }}
+      {{- $.Files.Get $agent.systemMessageFile | nindent 6 }}
+{{- end }}
 {{- end }}
 {{- end }}

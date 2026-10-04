@@ -1,17 +1,29 @@
 # Flo small-model evals
 
-Tracks which LLM powers Flo and why. Add a row to the iteration log and a results section whenever a model, prompt, parser, or serving flag changes, and keep the old sections so the next iteration has the full history.
+Tracks which LLM powers Flo and why. This file is the record: raw run outputs stay local (`slm_results/`, gitignored). Add a row to the iteration log and a results section whenever a model, prompt, parser, or serving flag changes, and keep the old sections so the next iteration has the full history.
 
-## Current state (2026-10-03)
+## Current state (2026-10-04)
 
-| Agent | Model | Path | Thinking |
-|---|---|---|---|
-| `kubeflow-docs-agent` (Flo) | Gemma 4 E4B (`google/gemma-4-E4B-it@ee0ef602`) | ModelConfig `slm-gemma` → `slm.slm-eval.svc:8000/v1`, **no** tool-choice proxy | off |
-| `kubeflow-debug-agent` | Qwen2.5-7B-Instruct-AWQ | ModelConfig `kserve-qwen` → tool-choice proxy → `qwen-llm-stable` | n/a |
+One model serves every agent. It is picked by one value (`model:`) in the `llm-runtime` chart and always served under the alias `flo-llm` at `http://llm-stable.ml-infra.svc.cluster.local/v1`, so agents and clients never change when the model does.
 
-Gemma runs from `docs-agent-mcp/charts/slm-runtime` (plain vLLM v0.30.0) on the second A10 (24 GB, node `10.0.10.59`). Qwen stays up on the first A10 as the debug model and the rollback target.
+| Agent | ModelConfig | Thinking |
+|---|---|---|
+| `kubeflow-docs-agent` (Flo) | `flo-llm` | off (server default) |
+| `kubeflow-docs-agent-think` (UI "Think deeper" toggle) | `flo-llm-think` (`reasoningEffort: low`, `maxTokens: 4096`) | on |
+| `kubeflow-debug-agent` | `flo-llm` | off |
 
-Why: Flo answers in about 1.3 s median instead of about 4 s, scores 258/291 against 168/291 for the current model on the same harness, and routes every docs, issues, and query-fidelity case correctly. Thinking is off because Kagent cannot send `chat_template_kwargs`, so the server default applies to every request, and thinking off is roughly twice as fast. Thinking on scores higher (270/291) and is the only Gemma setup that passes every gate below; flip it with the `--default-chat-template-kwargs` value in the slm-runtime chart if the known issues below matter more than latency.
+| `llm-runtime` profile | Model | Role |
+|---|---|---|
+| `gemma` (default) | `google/gemma-4-E4B-it@ee0ef602` | active |
+| `qwen` | `Qwen/Qwen2.5-7B-Instruct-AWQ@b2503754` | one-value rollback (`model: qwen`) |
+
+Both profiles run on the same vLLM v0.30.0 image. Every agent calls the model directly with `tool_choice: auto`; there is no tool-choice proxy (see "Tool-choice proxy" below). The debug agent moves to Gemma because Gemma think-off matches Qwen on the debug cases (51/60 each).
+
+Live since the 2026-10-04 cutover (`docs-agent-mcp/charts/RUNTIME_DECISIONS.md`): the `llm-runtime` release serves `gemma` on one A10, and the other A10 is free. Before the cutover, every round-2 run below re-checked both profiles on the release itself: Gemma reproduced its round-1 scores exactly, and Qwen on vLLM v0.30.0 matched its old-engine baseline, so `model: qwen` is a validated rollback.
+
+Why Gemma: Flo answers in about 1.3 s median instead of about 4 s, scores 258/291 against 168/291 for the current model on the same harness, and routes every docs, issues, and query-fidelity case correctly. Thinking on scores higher (270/291) and is the only Gemma setup that passes every gate below, at about 2.9 s median.
+
+Why the thinking toggle: Kagent cannot send `chat_template_kwargs`, but vLLM v0.30.0 maps `reasoning_effort` onto Gemma's thinking switch (checked 2026-10-03: unset or `none` = off; `low`, `medium`, `high` = on). The kagent ModelConfig field `reasoningEffort` therefore selects thinking per agent, and the frontend switches agents.
 
 ## What the harness measures
 
@@ -41,7 +53,7 @@ Answer checks: no URLs, no `[cN]` labels, sentence limit (docs), no paths (debug
 
 ## Results: round 1 (2026-10-02 to 2026-10-03)
 
-Hardware: NVIDIA A10 24 GB. Serving: `docker.io/vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90` (v0.30.0), bf16, `--max-model-len 32768 --gpu-memory-utilization 0.90 --enable-auto-tool-choice`. Thinking-on runs use `max_tokens` 4096, thinking-off 1024. "Proxy" applies the live `tool-choice-proxy.py` rewrite (chit-chat → `none`, other user turns → `required`).
+Hardware: NVIDIA A10 24 GB. Serving: `docker.io/vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90` (v0.30.0), bf16, `--max-model-len 32768 --gpu-memory-utilization 0.90 --enable-auto-tool-choice`. Thinking-on runs use `max_tokens` 4096, thinking-off 1024. "Proxy" rows applied the tool-choice proxy that ran in prod at the time (chit-chat → `none`, other user turns → `required`); the proxy and the harness's proxy mode have since been removed.
 
 | Model | Revision | Parser flags |
 |---|---|---|
@@ -70,7 +82,11 @@ Hardware: NVIDIA A10 24 GB. Serving: `docker.io/vllm/vllm-openai@sha256:8a69ffad
 
 All runs: 0 tool-call parse errors, 0 request errors. Every candidate run was deterministic across the 3 repeats except Granite think-off auto (`iss-ui-crashloop`) and Gemma think-on (`dbg-ans-missing-field`, `dbg-ans-no-combine`).
 
-Gemma's proxy and auto rows are identical because vLLM v0.30.0 ignores `tool_choice: "required"` for the `gemma4` parser: the response reports `finish_reason: tool_calls` with an empty `tool_calls` list and a plain-text answer. Gemma must not sit behind the tool-choice proxy.
+Gemma's proxy and auto rows are identical because vLLM v0.30.0 ignores `tool_choice: "required"` for the `gemma4` parser: the response reports `finish_reason: tool_calls` with an empty `tool_calls` list and a plain-text answer.
+
+### Tool-choice proxy
+
+Removed for now; all agents use `tool_choice: auto`. Evidence: the proxy never helped Gemma (identical scores above), it hurt `no_tool` for every other candidate (24/36 vs 33–36/36 on auto), and the debug agent on Qwen2.5-7B scores 51/60 on debug cases without it. The proxy source is preserved in git history (commit `5d61472`, `files/tool-choice-proxy.py`) for a later iteration; bring it back only with a run that shows it helps the model in use.
 
 ### Groups for the best setup of each model
 
@@ -98,7 +114,7 @@ Streamed docs answer: Flo system prompt, tools, a ~4.6K-token search result, 256
 | Qwen3.5-4B | 4832 | 0.78 s | 49.1 | 0.83 s | 45.6 | 159.1 |
 | Gemma 4 E4B | 4559 | 0.77 s | 42.0 | 0.81 s | 40.7 | 144.5 |
 
-The prod Qwen2.5-7B decode speed was not measured; its eval latency (p50 4.07 s) includes longer answers and is not comparable to the table above.
+Round 1 did not measure Qwen2.5-7B decode speed; round 2 below does, on the same vLLM v0.30.0 image.
 
 ### End-to-end through Kagent (real MCP, live index)
 
@@ -120,7 +136,30 @@ Same messages to a copy of the docs agent on Gemma (think off) and to live Flo o
 - **Blank reply on empty search results.** When a tool returns "No results found", the answer is empty (`ans-docs-empty`, `ans-issues-empty`). Thinking on handles both (one by retrying the search) but returns a blank reply on the wrong-component case instead.
 - **Brush-off replies.** Off-topic or identity questions sometimes get only "Sup." or "Hey." because the prompt's greeting rule over-applies (`none-france`, `none-poem`, `none-who-are-you`, `multi-offtopic-after`).
 - **Version trap.** Asked about 1.9 with only 1.10 evidence, it says 1.9 is not documented and then quotes 1.10's Kubernetes range. All three candidates except Granite do this.
-- **Debug answers.** When given a manifest, the debug persona sometimes searches again instead of answering (`dbg-ans-rpc`, `dbg-ans-apiversion-trap`). Not live: the debug agent stays on Qwen.
+- **Debug answers.** When given a manifest, the debug persona sometimes searches again instead of answering (`dbg-ans-rpc`, `dbg-ans-apiversion-trap`). The overall debug score still matches Qwen (51/60); live since the debug agent moved to `flo-llm` on 2026-10-04.
+
+### Prompt
+
+All runs used the docs prompt that is live in prod (`docs-agent-mcp/charts/docs-agent/files/docs-system-message.txt`, short form). The longer upstream prompt it replaced was never scored on these models. The brush-off replies come from its greeting rule, and it has no rule for empty search results; A/B both prompts on Gemma before changing either.
+
+## Results: round 2, `llm-runtime` chart (2026-10-04)
+
+Each profile ran as a Helm release of `docs-agent-mcp/charts/llm-runtime` on its own A10 (Gemma as the production release `llm-runtime`; Qwen as a temporary `llm-eval-qwen` release with `--set model=qwen`), served as `flo-llm` and scored through `svc/<release>-stable` with the same harness, dataset, and scorer as round 1.
+
+| Run | Overall | Docs | Debug | Call | Answer | No-call | `no_tool` | URLs | Gates | p50 s | p95 s | Tokens |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Gemma 4 E4B, think off (`model: gemma`, live) | 258 | 207/231 | 51/60 | 150/153 | 75/93 | 33/45 | 27/36 | 0 | fail (`no_tool`) | 1.35 | 2.83 | 32.6 |
+| Gemma 4 E4B, think on (`flo-llm-think`) | 270 | 219/231 | 51/60 | 147/153 | 84/93 | 39/45 | 33/36 | 0 | pass | 2.88 | 7.33 | 124.0 |
+| Qwen2.5-7B-AWQ on vLLM v0.30.0 (`model: qwen`) | 168 | 117/231 | 51/60 | 45/153 | 81/93 | 42/45 | 33/36 | 3 | baseline | 1.10 | 2.32 | 44.0 |
+
+All runs: 0 tool-call parse errors, 0 request errors. Gemma's per-group scores are identical to round 1 for both thinking modes (think-on is flaky on the same two debug cases). Qwen's score and groups match its round-1 baseline on KServe huggingfaceserver/vLLM 0.8.5, with lower latency (p50 1.10 s vs 4.07 s).
+
+| Model (vLLM v0.30.0) | Prompt tokens | TTFT | Decode tok/s | TTFT @4 | Per-stream tok/s @4 | Aggregate tok/s @4 |
+|---|---|---|---|---|---|---|
+| Gemma 4 E4B (bf16) | 4559 | 0.78 s | 42.4 | 0.83 s | 41.1 | 145.4 |
+| Qwen2.5-7B-Instruct (AWQ 4-bit) | 4618 | 0.75 s | 87.2 | 0.78 s | 80.7 | 259.2 |
+
+Qwen decodes about twice as fast (4-bit weights), but Gemma answers in fewer tokens and is the only one that routes docs, issues, and query-fidelity cases correctly, so Gemma stays the active profile.
 
 ## Scorer changes
 
@@ -139,24 +178,30 @@ python tests/eval/slm_tool_eval.py manifest gemma-4-e4b | kubectl apply -f -
 kubectl -n slm-eval port-forward svc/slm 8000:8000
 
 python tests/eval/slm_tool_eval.py run --name gemma-4-e4b-thinkoff-auto --model gemma-4-e4b \
-  --thinking off --tool-choice auto --repeats 3
+  --thinking off --repeats 3
 python tests/eval/slm_tool_eval.py run --name gemma-4-e4b-thinkon-auto --model gemma-4-e4b \
-  --thinking on --tool-choice auto --max-tokens 4096 --repeats 3
+  --thinking on --max-tokens 4096 --repeats 3
 python tests/eval/slm_tool_eval.py speed --name gemma-4-e4b --model gemma-4-e4b --thinking off
 
-# Prod baseline (read-only, bypasses the proxy)
+# Qwen rollback profile on the same vLLM v0.30.0 image (validate before relying on it)
+python tests/eval/slm_tool_eval.py manifest qwen2.5-7b-awq | kubectl apply -f -
+python tests/eval/slm_tool_eval.py run --name qwen2.5-7b-awq-vllm030 --model qwen2.5-7b-awq --repeats 3
+
+# Whatever llm-runtime serves now (read-only)
+kubectl -n ml-infra port-forward svc/llm-stable 8081:80
+python tests/eval/slm_tool_eval.py run --name flo-llm --base-url http://localhost:8081/v1 \
+  --model flo-llm --repeats 3
+
+# Legacy prod baseline, until cutover (read-only)
 kubectl -n ml-infra port-forward svc/qwen-llm-stable 8081:80
 python tests/eval/slm_tool_eval.py run --name prod-qwen2.5-7b-noproxy \
   --base-url http://localhost:8081/openai/v1 --model qwen2.5-7B --repeats 3
 
 # After changing scorer rules or the dataset's expectations
 python tests/eval/slm_tool_eval.py rescore --name gemma-4-e4b-thinkoff-auto
-
-# Browser chat against the port-forwarded model
-python tests/eval/slm_chat.py   # http://localhost:7860
 ```
 
-Saved runs live in `slm_results/<name>.json` (summary plus every reply) and `<name>-speed.json`.
+Runs write `slm_results/<name>.json` (summary plus every reply) and `<name>-speed.json` locally; copy the numbers into this file.
 
 ## Iteration log
 
@@ -168,11 +213,14 @@ Saved runs live in `slm_results/<name>.json` (summary plus every reply) and `<na
 | 2026-10-03 | Gemma 4 E4B, 4 setups | 270/291 think on (gate winner), 258/291 think off |
 | 2026-10-03 | Flo docs agent switched to Gemma think off; debug agent unchanged | 1–4 s replies end to end vs 2–25 s |
 | 2026-10-03 | `citations.py` renders `release_date` as `YYYY-MM-DD` | fixes raw epoch dates in answers |
+| 2026-10-03 | Tool-choice proxy removed; thinking exposed as a UI toggle (`kubeflow-docs-agent-think`, `reasoningEffort: low`) | users pick 258/291 at ~1.3 s or 270/291 at ~2.9 s |
+| 2026-10-03 | One `llm-runtime` chart, model picked by `model:` (catalog: `gemma`, `qwen`), alias `flo-llm`; all agents on `flo-llm` / `flo-llm-think`; Qwen moved to vLLM v0.30.0 | chart ready for cutover |
+| 2026-10-04 | Round 2 on the `llm-runtime` release: Gemma (think off/on) and Qwen on vLLM v0.30.0 | Gemma 258 / 270 (identical to round 1); Qwen 168 (matches baseline) |
+| 2026-10-04 | Cutover: all agents on `llm-runtime` (`model: gemma`); legacy Qwen and `slm-eval/slm` stopped | second A10 freed; end-to-end replies 2–3 s (docs), 8–11 s (think) |
 
 ## Next
 
-- Decide thinking on vs off for Flo using the known issues above; thinking on costs about 1.5 s median.
 - Fix the blank reply on empty results (prompt rule or a guard in the agent path) and re-run `empty_or_wrong`.
-- Measure prod Qwen2.5-7B decode speed with `speed` for a like-for-like baseline.
-- Run the debug suite on Gemma think on before moving the debug agent.
-- Move the slm-runtime release from `slm-eval` into `ml-infra` alongside Qwen.
+- A/B the live docs prompt against the longer upstream prompt on Gemma.
+- After a stable period, delete the stopped legacy objects (`RUNTIME_DECISIONS.md`, cutover step 6).
+- kagent's rendered config for `kubeflow-docs-agent-think` carries `reasoning_effort: low` and its replies are slower (8–11 s vs 2–3 s); confirm reasoning tokens in vLLM metrics once request logging or tracing is available.

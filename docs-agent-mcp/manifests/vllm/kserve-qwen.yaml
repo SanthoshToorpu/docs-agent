@@ -1,4 +1,4 @@
-# Legacy direct-apply manifest. The qwen-runtime Helm chart is the CD source of truth.
+# Legacy direct-apply manifest. The llm-runtime Helm chart is the CD source of truth.
 apiVersion: v1
 kind: Namespace
 metadata:

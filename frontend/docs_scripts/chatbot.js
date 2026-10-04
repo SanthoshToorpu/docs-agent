@@ -277,6 +277,36 @@ function createChatbotElements() {
         selectorCard.appendChild(selectorContent);
         personaSidebar.appendChild(selectorCard);
 
+        // 3. Thinking toggle (docs persona only): routes to the thinking agent
+        const thinkCard = document.createElement('div');
+        thinkCard.className = 'persona-card selector-card';
+        thinkCard.innerHTML = '<div class="persona-card-header"><h4>THINKING</h4></div>';
+
+        const thinkContent = document.createElement('div');
+        thinkContent.className = 'persona-card-content selector-content';
+
+        const thinkToggle = document.createElement('div');
+        thinkToggle.id = 'think-toggle';
+        thinkToggle.className = 'persona-pill';
+        thinkToggle.setAttribute('role', 'switch');
+        thinkToggle.setAttribute('aria-checked', 'false');
+        thinkToggle.tabIndex = 0;
+        thinkToggle.innerHTML = `
+            <div class="persona-pill-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/></svg>
+            </div>
+            <div class="persona-pill-text">
+                <span class="persona-pill-name">Think deeper</span>
+                <span class="persona-pill-sub">More careful · ~2x slower</span>
+            </div>
+            <div class="persona-pill-check">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+        `;
+        thinkContent.appendChild(thinkToggle);
+        thinkCard.appendChild(thinkContent);
+        personaSidebar.appendChild(thinkCard);
+
 
         // Assemble chatbot body
         chatbotBody.appendChild(personaSidebar);
@@ -531,6 +561,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     const optionsDropdown = document.getElementById('options-dropdown');
     const personaOptionDocs = document.getElementById('persona-docs');
     const personaOptionDebug = document.getElementById('persona-debug');
+    const thinkToggle = document.getElementById('think-toggle');
 
     // Validate all required elements exist
     if (!chatbotContainer || !chatbotBackdrop || !chatMessages || !userInput || !sendButton || !toggleButton || !chatbotToggle || !sidebarStrip || !sidebarNewChat || !sidebarExpand || !chatSidebar || !chatList) {
@@ -569,6 +600,7 @@ document.addEventListener('DOMContentLoaded', async function () {
     let currentChatIndex = -1; // Index of current chat in stack, -1 for new unsaved chat
     let currentContextId = generateUUID(); // KAgent session ID
     let currentPersona = 'docs';
+    let thinkingEnabled = false; // Docs persona only; selects the thinking agent
 
     // TODO 2: Browser storage functions ✅
     function saveChatsToStorage() {
@@ -832,11 +864,16 @@ document.addEventListener('DOMContentLoaded', async function () {
         if (scriptEl?.dataset?.agentBase) {
             return scriptEl.dataset.agentBase.replace(/\/$/, '') + KAGENT_A2A_PATH;
         }
-        return 'https://agent.santhoshtoorpu.com/a2a/docs-agent/kubeflow-docs-agent';
+        return 'https://agent.example.com/a2a/docs-agent/kubeflow-docs-agent';
     }
 
     function getAPIUrl() {
-        const agentName = currentPersona === 'debug' ? 'kubeflow-debug-agent' : 'kubeflow-docs-agent';
+        let agentName = 'kubeflow-docs-agent';
+        if (currentPersona === 'debug') {
+            agentName = 'kubeflow-debug-agent';
+        } else if (thinkingEnabled) {
+            agentName = 'kubeflow-docs-agent-think';
+        }
         const base = resolveAgentApiUrl();
 
         if (base.includes('kubeflow-docs-agent')) {
@@ -1691,9 +1728,42 @@ document.addEventListener('DOMContentLoaded', async function () {
 
 
 
+        updateThinkToggle();
+
         // Start fresh session for the new persona
         startNewChat();
         console.log(`Persona switched to: ${persona}`);
+    }
+
+    function updateThinkToggle() {
+        if (!thinkToggle) return;
+        const available = currentPersona === 'docs';
+        const on = available && thinkingEnabled;
+        thinkToggle.classList.toggle('active', on);
+        thinkToggle.classList.toggle('disabled', !available);
+        thinkToggle.setAttribute('aria-checked', String(on));
+        thinkToggle.setAttribute('aria-disabled', String(!available));
+        const check = thinkToggle.querySelector('.persona-pill-check');
+        if (check) check.classList.toggle('visible', on);
+    }
+
+    // Kagent sessions are per agent, so switching modes starts a new chat.
+    function toggleThinking() {
+        if (currentPersona !== 'docs') return;
+        thinkingEnabled = !thinkingEnabled;
+        updateThinkToggle();
+        startNewChat();
+        console.log(`Thinking ${thinkingEnabled ? 'on' : 'off'}`);
+    }
+
+    if (thinkToggle) {
+        thinkToggle.addEventListener('click', toggleThinking);
+        thinkToggle.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggleThinking();
+            }
+        });
     }
 
     if (personaOptionDocs) {
